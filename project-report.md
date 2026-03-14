@@ -2,3 +2,95 @@
 Group member: Jarle Kirkeby (jakir1503@oslomet.no)
 
 ## Task 1: Add database constraints
+### Table: `lego_brick`
+This table has four columns: 
+* `brick_type_id` (text)
+* `color_id` (integer)
+* `name` (text)
+* `preview_image_url` (text)
+
+`preview_image_url` and `name` are not suitable primary keys because their values might change, and they could also not be unique.
+
+`brick_type_id` and `color_id` we can assume will not change, but only a combination of the two would be unique. So we need to make a decision on the order. The first value in the primary key will always be indexed, but the second will only have an automatic index when the searched in combination with the first. What will be the more common pattern?
+* Searching for all bricks of a certain color? Then making the first value of the composite key `color_id` would make sense, since it would be sorted by this value first.
+* Searching for all the colors for a certain brick? Then we would want the first value to be `brick_type_id`.
+
+I decided to make the composite key `brick_type_id`-`color_id` because I think the second pattern will be more common. Users will look up sets, then go to the individual bricks and look at color variations for that brick. Finding all bricks of a certain color is a more niche request, but an index can be made for the color column if necessary.
+
+To add the primary key I connected to the database, and used the command:
+```
+ALTER TABLE lego_brick ADD PRIMARY KEY (brick_type_id, color_id);
+```
+
+### Table: `lego_inventory`
+This table also has four columns:
+* `set_id` (text)
+* `brick_type_id` (text)
+* `color_id` (integer)
+* `count` (integer)
+
+The `count` value is not an identifier as many combinations of sets, bricks and color can have the same count. So here it is clear that the primary key should be some combination of `set_id`, `brick_type_id` and `color_id`. I have already decided how to best combine brick and color, so where should we put the set?
+* Sort by set first? Then we will have the table sorted by set -> brick -> color. Which is suitable if the primary use case is to retrieve sets, then their bricks and color.
+* Sort by brick/color first? Then we would expect users to look for specific bricks and colors, and then wanting to find all sets that use them.
+
+Sorting by set seems to support the most common use case: "finding a set, and then viewing the inventory for that set". The other option is more niche, but can be supported by manually adding indexes.
+
+```
+ALTER TABLE lego_inventory ADD PRIMARY KEY (set_id, brick_type_id, color_id);
+```
+When I tried to add this constraint, I got an error:
+```
+ERROR:  could not create unique index "lego_inventory_pkey"
+DETAIL:  Key (set_id, brick_type_id, color_id)=(10218-1, 48729b, 11) is duplicated.
+```
+I investigated the specific IDs and found that the set had multiple counts for the same brick:
+```
+lego-db=# SELECT * FROM lego_inventory WHERE set_id = '10218-1' AND brick_type_id = '48729b';
+ set_id  | brick_type_id | color_id | count 
+---------+---------------+----------+-------
+ 10218-1 | 48729b        |       11 |     2
+ 10218-1 | 48729b        |       86 |     2
+ 10218-1 | 48729b        |       11 |     1
+ 10218-1 | 48729b        |       86 |     1
+(4 rows)
+```
+
+To solve this we need to either change the data (combine the lines into single lines with 3 count for each). If we don't we must introduce a surrogate key since there are no valid natural keys for the table.
+
+I chose to combine the rows since I don't consider it necessary to store multiple counts for a combination of set/brick/color. If this is necessary a bag (or brick group) id should be added to group bricks within a set together.
+
+```
+DELETE FROM lego_inventory WHERE set_id = '10218-1' AND brick_type_id = '48729b';
+INSERT INTO lego_inventory VALUES ('10218-1', '48729b', 11, 3), ('10218-1', '48729b', 86, 3);
+
+# Etter endring:
+ set_id  | brick_type_id | color_id | count 
+---------+---------------+----------+-------
+ 10218-1 | 48729b        |       11 |     3
+ 10218-1 | 48729b        |       86 |     3
+(2 rows)
+```
+After combining I found that there were more rows in the table where the same issue prevented creating the primary key. So I used this transaction to combine all of them:
+```
+BEGIN;
+CREATE TEMP TABLE temp_lego_inventory AS (SELECT set_id, brick_type_id, color_id, SUM(count) as count FROM lego_inventory GROUP BY set_id, brick_type_id, color_id);
+# Feedback from server: SELECT 1199929
+
+DELETE FROM lego_inventory;
+# Feedback form server: DELETE 1301257
+
+INSERT INTO lego_inventory (set_id, brick_type_id, color_id, count) SELECT set_id, brick_type_id, color_id, count FROM temp_lego_inventory;
+# Feedback from server: INSERT 0 1199929
+
+DROP TABLE temp_lego_inventory;
+COMMIT;
+```
+Based on the feedback we can see the `1301257 - 1199929 = 101318` lines where combined. Which is around 7% if the table, so this is a pretty big decision to make - maybe the separation of these values had some meaning in the original data which has now been removed (but that link was already severed when the data was changed into its current state for the assignment before the lines were combined).
+
+I was able to add the primary key after making these changes.
+
+### Table: `lego_set`
+This table has an `id` column that already fulfills the requirements for a primary key, so I added that as the primary key:
+```
+ALTER TABLE lego_set ADD PRIMARY KEY (id);
+```
