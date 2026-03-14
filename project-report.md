@@ -94,3 +94,58 @@ This table has an `id` column that already fulfills the requirements for a prima
 ```
 ALTER TABLE lego_set ADD PRIMARY KEY (id);
 ```
+
+## Task 2: Design indexes for flexible queries
+### Query: Which LEGO sets contain a specific brick type regardless of color?
+Testing with the first, middle (OFFSET 500000) and last `brick_type_id` in the `lego_inventory` table: *29bc01*, *3062*, *sw0517a*
+```
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '29bc01';
+# (32 rows)
+# Time: 131.496 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '3062';
+# (7640 rows)
+# Time: 123.281 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = 'sw0517a';
+# (1 row)
+# Time: 130.074 ms
+```
+The query will have to go visit each set since that's the first value in the composite key. But within each set the rows are sorted on `brick_type_id`, so the database should be able to quickly check if the brick is in that set or not (binary search). If the composite key had `brick_type_id` as its first value this search would be optimized for (table would be sorted by bricktype).
+
+I added an index for `brick_type_id`:
+```
+CREATE INDEX ON lego_inventory(brick_type_id);
+```
+And re-tested the queries:
+```
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '29bc01';
+# (32 rows)
+# Time: 4.305 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '3062';
+# (7640 rows)
+# Time: 88.073 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = 'sw0517a';
+# (1 row)
+# Time: 0.440 ms
+```
+We see quite large improvements for the brick types with few results as the database is quickly able to find the bricks, and then get the sets for each. For the second result the improvement was OK, but would have expected more. Maybe if I indexed on both `brick_type_id` and `set_id` I would see more improvement:
+```
+CREATE INDEX ON lego_inventory(brick_type_id, set_id);
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '29bc01';
+# (32 rows)
+# Time: 0.417 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = '3062';
+# (7640 rows)
+# Time: 1.930 ms
+
+SELECT set_id FROM lego_inventory WHERE brick_type_id = 'sw0517a';
+# (1 row)
+# Time: 0.440 ms
+```
+This improved the queries (especially the second) because now the database also knows the sets are ordered in the index and can quickly get both.
+
