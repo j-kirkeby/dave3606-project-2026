@@ -232,3 +232,74 @@ With these changes running the request again to see how long it took:
 127.0.0.1 - - [15/Mar/2026 12:10:07] "GET /sets HTTP/1.1" 200 -
 Time to render all sets: 0.057146040999214165
 ```
+
+## Task 4: Encoding, compression, and file handle leaks
+First I added the query parameter for encoding with a default value as `'UTF-8'` and checked that the value was one of the valid encodings:
+```
+@app.route("/sets")
+def sets():
+    valid_encodings = ['UTF-16-LE', 'UTF-16-BE', 'UTF-32-LE', 'UTF-32-BE', 'UTF-8']
+
+    requested_encoding = request.args.get('encoding', default='UTF-8')
+
+    encoding = requested_encoding if requested_encoding in valid_encodings else 'UTF-8' 
+```
+Then I made sure to actually use the encoding on the HTML, by:
+1) Changing the template (`sets.html`) to take in an encoding:
+    ```
+    <meta charset="{ENCODING}">
+    ```
+2) Applying a second replace when creating the HTML (in the `/sets` endpoint):
+    ```
+    page_html = template.replace("{ROWS}", result).replace("{ENCODING}", encoding)
+    ``` 
+3) Encoding and passing the bytes to flask response:
+    ```
+    # Manually encode the bytes
+    response_bytes = page_html.encode(encoding)
+
+    return Response(response_bytes, content_type=f"text/html; charset={encoding}")
+    ``` 
+This worked in that I got the responses to send, and got different sizes for different encodings. But only UTF-8 encoded HTML would display correctly (the others just displayed the raw HTML with tags). After some troubleshooting with AI, I found that the issue was caused by the browser (Firefox), which would only show UTF-8 and UTF-16 (without -LE and -BE). I added UTF-16 to the valid encodings, and it rendered properly. Since I confirmed the problem was out of my control, I just continued with the assignment without fixing this issue. 
+
+I tested different encodings to see the difference in sizes:
+
+| Encoding  | Size  |
+|-----------|-------|
+| UTF-8     | 2MB   |
+| UTF-16-LE | 4MB   |
+| UTF-16-BE | 4MB   |
+| UTF-32-LE | 8MB   |
+| UTF-32-BE | 8MB   |
+
+Then I added compression using the `gzip` library, and set the `Content-Encoding` header field:
+```
+response_bytes = page_html.encode(encoding)
+compressed_bytes = gzip.compress(response_bytes)
+
+return Response(
+    compressed_bytes, 
+    headers = {
+        'Content-Type': f'text/html; charset={encoding}',
+        'Content-Encoding': 'gzip'      
+    })
+```
+Which gave these updated size when tested:
+| Encoding  | Size  | Size with `gzip`  |
+|-----------|-------|-------------------|
+| UTF-8     | 2MB   | 335 kB            |
+| UTF-16-LE | 4MB   | 390 kB            |
+| UTF-16-BE | 4MB   | 390 kB            |
+| UTF-32-LE | 8MB   | 450 kB            |
+| UTF-32-BE | 8MB   | 450 kB            |
+
+### Closing file handles
+When the templates are opened we don't use `try-catch-finally` or `with` to ensure that the file handles are closed:
+```
+template = open("templates/index.html").read()
+```
+I replaced this with the safer pattern that reads into a string and then closes the file handle:
+```
+with open("templates/index.html").read() as f:
+    template = f.read()
+```

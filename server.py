@@ -1,6 +1,7 @@
 import json
 import html
 import psycopg
+import gzip
 from flask import Flask, Response, request
 from time import perf_counter
 
@@ -17,13 +18,22 @@ DB_CONFIG = {
 
 @app.route("/")
 def index():
-    template = open("templates/index.html").read()
+    with open("templates/index.html").read() as f:
+        template = f.read()
+        
     return Response(template)
 
 
 @app.route("/sets")
 def sets():
-    template = open("templates/sets.html").read()
+    valid_encodings = ['UTF-16-LE', 'UTF-16-BE', 'UTF-32-LE', 'UTF-32-BE', 'UTF-16', 'UTF-8']
+
+    requested_encoding = request.args.get('encoding', default='UTF-8')
+
+    encoding = requested_encoding if requested_encoding in valid_encodings else 'UTF-8' 
+
+    with open("templates/sets.html").read() as f:
+        template = f.read()
     rows = [] # List to hold the rows to avoid painter's algorithm
 
     start_time = perf_counter()
@@ -40,13 +50,24 @@ def sets():
         conn.close()
 
     result = "".join(rows) # Combine the strings efficiently, all at once
-    page_html = template.replace("{ROWS}", result)
-    return Response(page_html, content_type="text/html")
+    page_html = template.replace("{ROWS}", result).replace("{ENCODING}", encoding)
+
+    # Manually encode the bytes
+    response_bytes = page_html.encode(encoding)
+    compressed_bytes = gzip.compress(response_bytes)
+
+    return Response(
+        compressed_bytes, 
+        headers = {
+            'Content-Type': f'text/html; charset={encoding}',
+            'Content-Encoding': 'gzip'      
+        })
 
 
 @app.route("/set")
 def legoSet():  # We don't want to call the function `set`, since that would hide the `set` data type.
-    template = open("templates/set.html").read()
+    with open("templates/set.html").read() as f:
+        template = f.read()
     return Response(template)
 
 
