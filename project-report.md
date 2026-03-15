@@ -188,4 +188,47 @@ SELECT set_id FROM lego_inventory WHERE color_id = 132;
 Again we see a large improvement, and for colors used in few sets the database can resolve the query almost instantly.
 
 
+## Task 3: Algorithmic complexity improvements
+First I tested loading all the sets in the browser, the console tells me the time it took:
+```
+127.0.0.1 - - [15/Mar/2026 11:38:26] "GET / HTTP/1.1" 200 -
+Time to render all sets: 1.0528725479998684
+```
 
+Looking at the main loop of `/sets` endpoint we can see that this is the classic example of the **painter's algorithm** where a string is expanded by copying the entire string so far and the new addition. 
+```
+for row in cur.fetchall():
+    html_safe_id = html.escape(row[0])
+    html_safe_name = html.escape(row[1])
+    existing_rows = rows
+    rows = existing_rows + f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n'
+```
+Each time you add a row you need to re-do the work *k* (writing a line) one more time, and for the last addition you do *k* *(n-1)* times which makes the total complexity $\Theta$(*k*n²). This makes this algorithm which should have a complexity of *n* iterating through a list have a complexity of $\Theta$(n²).
+
+To solve the problem I keep all the rows in a list, and then join them all at once at the end. Which means we just iterate through a list of *n* elements twice. Complexity: $\Theta$(2n) = $\Theta$(n).
+```
+template = open("templates/sets.html").read()
+rows = [] # List to hold the rows to avoid painter's algorithm
+
+start_time = perf_counter()
+conn = psycopg.connect(**DB_CONFIG)
+try:
+    with conn.cursor() as cur:
+        cur.execute("select id, name from lego_set order by id")
+        for row in cur.fetchall():
+            html_safe_id = html.escape(row[0])
+            html_safe_name = html.escape(row[1])
+            rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+    print(f"Time to render all sets: {perf_counter() - start_time}")
+finally:
+    conn.close()
+
+result = "".join(rows) # Combine the strings efficiently, all at once
+page_html = template.replace("{ROWS}", result)
+return Response(page_html, content_type="text/html")
+```
+With these changes running the request again to see how long it took:
+```
+127.0.0.1 - - [15/Mar/2026 12:10:07] "GET /sets HTTP/1.1" 200 -
+Time to render all sets: 0.057146040999214165
+```
