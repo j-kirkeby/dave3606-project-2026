@@ -74,7 +74,58 @@ def legoSet():  # We don't want to call the function `set`, since that would hid
 @app.route("/api/set")
 def apiSet():
     set_id = request.args.get("id")
-    result = {"set_id": set_id}
+
+    # We need to connect to the database and retrieve the set and brick information
+    start_time = perf_counter()
+    conn = psycopg.connect(**DB_CONFIG)
+    try:
+        with conn.cursor() as cur:
+            # Retrieve set information
+            # Using prepared statement to avoid SQL injection
+            cur.execute(
+                "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+                [set_id],
+                prepare=True)
+            result = cur.fetchone()
+            html_safe_year = result[0] # No need for html.escape() on integers
+            html_safe_name = html.escape(result[1])
+            html_safe_category = html.escape(result[2])
+            html_safe_preview_image_url = html.escape(result[3])
+        
+            # Retrieve inventory and brick information
+            # Using prepared statement to avoid SQL injection
+            html_safe_inventory = []
+            cur.execute(
+                "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+                "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+                "WHERE set_id = %s;",
+                [set_id],
+                prepare=True)
+            
+            for item in cur.fetchall():
+                html_safe_item = {}
+                html_safe_item["brick_type_id"] = html.escape(item[1])
+                html_safe_item["color_id"] = item[2]
+                html_safe_item["count"] = item[3]
+                html_safe_item["name"] = html.escape(item[4])
+                html_safe_item["preview_image_url"] = html.escape(item[5])
+                
+                # Add the item to the inventory
+                html_safe_inventory.append(html_safe_item)
+
+        print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
+    finally:
+        conn.close()
+    
+    
+    result = {
+        "set_id": set_id,
+        "year": html_safe_year,
+        "name": html_safe_name,
+        "category": html_safe_category,
+        "preview_image_url": html_safe_preview_image_url,
+        "inventory": html_safe_inventory
+    }
     json_result = json.dumps(result, indent=4)
     return Response(json_result, content_type="application/json")
 

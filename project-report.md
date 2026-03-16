@@ -305,4 +305,87 @@ with open("templates/index.html") as f:
 ```
 
 ## Task 5: File formats
+### Endpoint: `/api/set`
+I took inspiration from the database connection in the `/sets` endpoint to create the database queries for a new `/api/set` endpoint:
+* First I query the `lego_set` table to retrieve the set information using a prepared statement as the `id` is a string (vulnerable to SQL Injection):
+    ```
+    cur.execute(
+                "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+                [set_id],
+                prepare=True)
+    ```
+* Then I store the use `html.escape(value)` to clean the strings (the integers are safe):
+    ```
+    result = cur.fetchone()
+            html_safe_year = result[0] # No need for html.escape() on integers
+            html_safe_name = html.escape(result[1])
+            html_safe_category = html.escape(result[2])
+            html_safe_preview_image_url = html.escape(result[3])
+    ```
+* To retrieve the information for each inventory item, I use a JOIN-statement to combine information in the `lego_inventory` and `lego_brick` tables:
+    ```
+    cur.execute(
+                "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+                "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+                "WHERE set_id = %s;",
+                [set_id],
+                prepare=True)
+    ```
+* Since the result can have many lines, I iterate through them and store the values in a dictionary which I then add to a list (using `html.escape(value)` on the strings):
+    ```
+    for item in cur.fetchall():
+                html_safe_item = {}
+                html_safe_item["brick_type_id"] = html.escape(item[1])
+                html_safe_item["color_id"] = item[2]
+                html_safe_item["count"] = item[3]
+                html_safe_item["name"] = html.escape(item[4])
+                html_safe_item["preview_image_url"] = html.escape(item[5])
+                
+                # Add the item to the inventory
+                html_safe_inventory.append(html_safe_item)
+    ```
+* Lastly, I compose the result into a dictionary:
+    ```
+    result = {
+        "set_id": set_id,
+        "year": html_safe_year,
+        "name": html_safe_name,
+        "category": html_safe_category,
+        "preview_image_url": html_safe_preview_image_url,
+        "inventory": html_safe_inventory
+    }
+    ```
 
+Example of the resulting JSON output:
+```
+{
+    "set_id": "0011-2",
+    "year": 1982,
+    "name": "LEGOLAND Mini-Figures",
+    "category": "Catalog: Sets: Town: Classic Town: Supplemental",
+    "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0011-2.t1.png",
+    "inventory": [
+        {
+            "brick_type_id": "cop001",
+            "color_id": 0,
+            "count": 1,
+            "name": "Police - Suit with 4 Buttons, Black Legs, White Hat",
+            "preview_image_url": "https://img.bricklink.com/M/cop001.jpg"
+        },
+        {
+            "brick_type_id": "pln024",
+            "color_id": 0,
+            "count": 1,
+            "name": "Plain Blue Torso with Blue Arms, Red Legs, Black Pigtails Hair",
+            "preview_image_url": "https://img.bricklink.com/M/pln024.jpg"
+        },
+        {
+            "brick_type_id": "pln026",
+            "color_id": 0,
+            "count": 1,
+            "name": "Plain Red Torso with Red Arms, Blue Legs, Red Construction Helmet",
+            "preview_image_url": "https://img.bricklink.com/M/pln026.jpg"
+        }
+    ]
+}
+```
