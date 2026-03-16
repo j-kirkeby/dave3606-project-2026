@@ -300,6 +300,9 @@ template = open("templates/index.html").read()
 ```
 I replaced this with the safer pattern that reads into a string and then closes the file handle:
 ```
-with open("templates/index.html").read() as f:
+with open("templates/index.html") as f:
     template = f.read()
 ```
+
+## Task 5: File formats
+

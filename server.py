@@ -18,7 +18,7 @@ DB_CONFIG = {
 
 @app.route("/")
 def index():
-    with open("templates/index.html").read() as f:
+    with open("templates/index.html") as f:
         template = f.read()
         
     return Response(template)
@@ -32,7 +32,7 @@ def sets():
 
     encoding = requested_encoding if requested_encoding in valid_encodings else 'UTF-8' 
 
-    with open("templates/sets.html").read() as f:
+    with open("templates/sets.html") as f:
         template = f.read()
     rows = [] # List to hold the rows to avoid painter's algorithm
 
@@ -66,7 +66,7 @@ def sets():
 
 @app.route("/set")
 def legoSet():  # We don't want to call the function `set`, since that would hide the `set` data type.
-    with open("templates/set.html").read() as f:
+    with open("templates/set.html") as f:
         template = f.read()
     return Response(template)
 
