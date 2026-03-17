@@ -389,3 +389,22 @@ Example of the resulting JSON output:
     ]
 }
 ```
+
+### Designing my own binary format
+First I created a new endpoint `/api/set/bin`, and copied over a lot of the code from the `api/set` which retrieves the set information and inventory and stores it in a dictionary.
+```
+@app.route("api/set/bin")
+def apiSetBin():
+    ...
+```
+I removed the `html.escape()` calls, since we want the binary to show exactly what is in the database.
+
+The next task is to encode this into a binary format in a way that enables it to be decoded into the same dictionary. Looking at the example from the last part of the task we can determine the structure of the dictionary.
+* First there are set properties that can be packed directly into binary and unpacked.
+* Then there is an inventory that contain brick information, but since this is just a list and it's at the end of the structure we can safely just read any values after the set properties as bricks - and append them to the list.
+* Some values can be null, so for these we include a single byte to indicate if the value is present or not where 0 represents a null value.
+
+My format looked like this:
+| Format character  | Function |
+| :---:             | :---: |
+|length of set_id   | encoded_set_id    |
