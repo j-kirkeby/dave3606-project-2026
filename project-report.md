@@ -404,7 +404,80 @@ The next task is to encode this into a binary format in a way that enables it to
 * Then there is an inventory that contain brick information, but since this is just a list and it's at the end of the structure we can safely just read any values after the set properties as bricks - and append them to the list.
 * Some values can be null, so for these we include a single byte to indicate if the value is present or not where 0 represents a null value.
 
-My format looked like this:
-| Format character  | Function |
-| :---:             | :---: |
-|length of set_id   | encoded_set_id    |
+My format looked like this (using big-endian endianness):
+#### Set information
+(?) indicates the value is not present if null.
+| Format Character  | Bytes | Function                      |
+| :---------------: | :---: | :---------------------------- |
+| H                 | 2     | Length of `set_id`            |
+| c                 | n     | `set_id`                      |
+| B                 | 1     | `year` is null?               |
+| H                 | 2     | `year` (?)                    |
+| H                 | 2     | Length of `name`              |
+| c                 | n     | `name`                        |
+| B                 | 1     | `category` is null?           |
+| H                 | 2     | Length of `category`          |
+| c                 | n     | `category` (?)                |
+| B                 | 1     | `preview_image_url` is null?  |
+| H                 | 2     | Length of `preview_image_url` |
+| c                 | n     | `preview_image_url` (?)       |
+
+#### Inventory lines information
+This may be an empty list or contain several values.
+| Format Character  | Bytes | Function                      |
+| :---------------: | :---: | :---------------------------- |
+| H                 | 2     | Length of `brick_type_id`     |
+| c                 | n     | `brick_type_id`               |
+| B                 | 1     | `color_id`                    |
+| H                 | 2     | `count`                       |
+| H                 | 2     | Length of `name`              |
+| c                 | n     | `name`                        |
+| B                 | 1     | `preview_image_url` is null?  |
+| H                 | 2     | Length of `preview_image_url` |
+| c                 | n     | `preview_image_url` (?)       |
+
+### Reading the binary format
+I created the script `print_lego_binary` that reads the data from a binary file created by the `/api/set/bin` endpoint. It reads the data into a Python dictionary and then prints it in the common JSON format (with indentations). To run it use `python3 print_lego_binary.py [binary-filename]`
+
+Example output:
+```
+$ python3 print_lego_binary.py bin
+{
+    "set_id": "0016-1",
+    "year": 1982,
+    "name": "Knights",
+    "category": "Catalog: Sets: Castle: Classic Castle",
+    "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png",
+    "inventory": [
+        {
+            "brick_type_id": "3847a",
+            "color_id": 9,
+            "count": 3,
+            "name": "Light Gray Minifigure, Weapon Sword, Shortsword - Polished Rigid ABS",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas229",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knights Tournament Knight Black, Red Legs with Black Hips, Light Gray Neck-Protector",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas230",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knights Tournament Knight Red, Black Legs with Red Hips",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas233",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knight, Shield Red/Gray, Light Gray Legs with Red Hips, Light Gray Neck-Protector",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        }
+    ]
+}
+```
+

@@ -168,7 +168,7 @@ def write_set_to_binary(set):
         # The single byte holds 0 if null
         binary += struct.pack(">B", 0)
     else:
-        encoded_preview_image_url = set["category"].encode("utf-8")
+        encoded_preview_image_url = set["preview_image_url"].encode("utf-8")
         encoded_preview_image_url_length = len(encoded_preview_image_url)
         binary += struct.pack(">BH", 1, encoded_preview_image_url_length)
         binary += encoded_preview_image_url
@@ -198,7 +198,7 @@ def write_set_to_binary(set):
             # The single byte holds 0 if null
             binary += struct.pack(">B", 0) 
         else:
-            encoded_preview_image_url = set["category"].encode("utf-8")
+            encoded_preview_image_url = set["preview_image_url"].encode("utf-8")
             encoded_preview_image_url_length = len(encoded_preview_image_url)
             binary += struct.pack(">BH", 1, encoded_preview_image_url_length)
             binary += encoded_preview_image_url
