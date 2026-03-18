@@ -300,6 +300,184 @@ template = open("templates/index.html").read()
 ```
 I replaced this with the safer pattern that reads into a string and then closes the file handle:
 ```
-with open("templates/index.html").read() as f:
+with open("templates/index.html") as f:
     template = f.read()
 ```
+
+## Task 5: File formats
+### Endpoint: `/api/set`
+I took inspiration from the database connection in the `/sets` endpoint to create the database queries for a new `/api/set` endpoint:
+* First I query the `lego_set` table to retrieve the set information using a prepared statement as the `id` is a string (vulnerable to SQL Injection):
+    ```
+    cur.execute(
+                "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+                [set_id],
+                prepare=True)
+    ```
+* Then I store the use `html.escape(value)` to clean the strings (the integers are safe):
+    ```
+    result = cur.fetchone()
+            html_safe_year = result[0] # No need for html.escape() on integers
+            html_safe_name = html.escape(result[1])
+            html_safe_category = html.escape(result[2])
+            html_safe_preview_image_url = html.escape(result[3])
+    ```
+* To retrieve the information for each inventory item, I use a JOIN-statement to combine information in the `lego_inventory` and `lego_brick` tables:
+    ```
+    cur.execute(
+                "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+                "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+                "WHERE set_id = %s;",
+                [set_id],
+                prepare=True)
+    ```
+* Since the result can have many lines, I iterate through them and store the values in a dictionary which I then add to a list (using `html.escape(value)` on the strings):
+    ```
+    for item in cur.fetchall():
+                html_safe_item = {}
+                html_safe_item["brick_type_id"] = html.escape(item[1])
+                html_safe_item["color_id"] = item[2]
+                html_safe_item["count"] = item[3]
+                html_safe_item["name"] = html.escape(item[4])
+                html_safe_item["preview_image_url"] = html.escape(item[5])
+                
+                # Add the item to the inventory
+                html_safe_inventory.append(html_safe_item)
+    ```
+* Lastly, I compose the result into a dictionary:
+    ```
+    result = {
+        "set_id": set_id,
+        "year": html_safe_year,
+        "name": html_safe_name,
+        "category": html_safe_category,
+        "preview_image_url": html_safe_preview_image_url,
+        "inventory": html_safe_inventory
+    }
+    ```
+
+Example of the resulting JSON output:
+```
+{
+    "set_id": "0011-2",
+    "year": 1982,
+    "name": "LEGOLAND Mini-Figures",
+    "category": "Catalog: Sets: Town: Classic Town: Supplemental",
+    "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0011-2.t1.png",
+    "inventory": [
+        {
+            "brick_type_id": "cop001",
+            "color_id": 0,
+            "count": 1,
+            "name": "Police - Suit with 4 Buttons, Black Legs, White Hat",
+            "preview_image_url": "https://img.bricklink.com/M/cop001.jpg"
+        },
+        {
+            "brick_type_id": "pln024",
+            "color_id": 0,
+            "count": 1,
+            "name": "Plain Blue Torso with Blue Arms, Red Legs, Black Pigtails Hair",
+            "preview_image_url": "https://img.bricklink.com/M/pln024.jpg"
+        },
+        {
+            "brick_type_id": "pln026",
+            "color_id": 0,
+            "count": 1,
+            "name": "Plain Red Torso with Red Arms, Blue Legs, Red Construction Helmet",
+            "preview_image_url": "https://img.bricklink.com/M/pln026.jpg"
+        }
+    ]
+}
+```
+
+### Designing my own binary format
+First I created a new endpoint `/api/set/bin`, and copied over a lot of the code from the `api/set` which retrieves the set information and inventory and stores it in a dictionary.
+```
+@app.route("api/set/bin")
+def apiSetBin():
+    ...
+```
+I removed the `html.escape()` calls, since we want the binary to show exactly what is in the database.
+
+The next task is to encode this into a binary format in a way that enables it to be decoded into the same dictionary. Looking at the example from the last part of the task we can determine the structure of the dictionary.
+* First there are set properties that can be packed directly into binary and unpacked.
+* Then there is an inventory that contain brick information, but since this is just a list and it's at the end of the structure we can safely just read any values after the set properties as bricks - and append them to the list.
+* Some values can be null, so for these we include a single byte to indicate if the value is present or not where 0 represents a null value.
+
+My format looked like this (using big-endian endianness):
+#### Set information
+(?) indicates the value is not present if null.
+| Format Character  | Bytes | Function                      |
+| :---------------: | :---: | :---------------------------- |
+| H                 | 2     | Length of `set_id`            |
+| c                 | n     | `set_id`                      |
+| B                 | 1     | `year` is null?               |
+| H                 | 2     | `year` (?)                    |
+| H                 | 2     | Length of `name`              |
+| c                 | n     | `name`                        |
+| B                 | 1     | `category` is null?           |
+| H                 | 2     | Length of `category`          |
+| c                 | n     | `category` (?)                |
+| B                 | 1     | `preview_image_url` is null?  |
+| H                 | 2     | Length of `preview_image_url` |
+| c                 | n     | `preview_image_url` (?)       |
+
+#### Inventory lines information
+This may be an empty list or contain several values.
+| Format Character  | Bytes | Function                      |
+| :---------------: | :---: | :---------------------------- |
+| H                 | 2     | Length of `brick_type_id`     |
+| c                 | n     | `brick_type_id`               |
+| B                 | 1     | `color_id`                    |
+| H                 | 2     | `count`                       |
+| H                 | 2     | Length of `name`              |
+| c                 | n     | `name`                        |
+| B                 | 1     | `preview_image_url` is null?  |
+| H                 | 2     | Length of `preview_image_url` |
+| c                 | n     | `preview_image_url` (?)       |
+
+### Reading the binary format
+I created the script `print_lego_binary` that reads the data from a binary file created by the `/api/set/bin` endpoint. It reads the data into a Python dictionary and then prints it in the common JSON format (with indentations). To run it use `python3 print_lego_binary.py [binary-filename]`
+
+Example output:
+```
+$ python3 print_lego_binary.py bin
+{
+    "set_id": "0016-1",
+    "year": 1982,
+    "name": "Knights",
+    "category": "Catalog: Sets: Castle: Classic Castle",
+    "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png",
+    "inventory": [
+        {
+            "brick_type_id": "3847a",
+            "color_id": 9,
+            "count": 3,
+            "name": "Light Gray Minifigure, Weapon Sword, Shortsword - Polished Rigid ABS",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas229",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knights Tournament Knight Black, Red Legs with Black Hips, Light Gray Neck-Protector",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas230",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knights Tournament Knight Red, Black Legs with Red Hips",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        },
+        {
+            "brick_type_id": "cas233",
+            "color_id": 0,
+            "count": 1,
+            "name": "Classic - Knight, Shield Red/Gray, Light Gray Legs with Red Hips, Light Gray Neck-Protector",
+            "preview_image_url": "https://img.bricklink.com/ItemImage/ST/0/0016-1.t1.png"
+        }
+    ]
+}
+```
+
