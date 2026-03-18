@@ -24,18 +24,27 @@
         <script>
             const urlParameters = new URLSearchParams(document.location.search);
             const setId = urlParameters.get("id");
+
             fetch(`/api/set?id=${setId}`)
                 .then(function(setData) { return setData.json(); })
                 .then(function(setJson) {
+                    document.getElementById("setId").textContent = setJson.set_id;
+                    document.getElementById("setName").textContent = setJson.name;
+
                     const inventoryTable = document.getElementById("inventory");
-                    const inventoryRow = document.createElement("tr");
-                    inventoryRow.innerHTML = (
-                        "<td>Example row</td>" +
-                        "<td>to show how to</td>" +
-                        "<td>dynamically construct HTML</td>" +
-                        "<td>in JavaScript</td>"
-                    )
-                    inventoryTable.appendChild(inventoryRow);
+
+                    setJson.inventory.forEach(item => {
+                        const inventoryRow = document.createElement("tr");
+
+                        inventoryRow.innerHTML = `
+                            <td><img src="${item.preview_image_url}" width="50"></td>
+                            <td>${item.brick_type_id}</td>
+                            <td>${item.color_id}</td>
+                            <td>${item.count}</td>
+                        `;
+
+                        inventoryTable.appendChild(inventoryRow);
+                    });
                 })
                 .catch(function(err) {
                     document.getElementById("error").textContent = "Failed to load data: " + err;

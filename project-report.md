@@ -481,3 +481,102 @@ $ python3 print_lego_binary.py bin
 }
 ```
 
+## Task 6: Frontend and caching
+### Fixing the frontend
+First I updated the `set.html` file to correctly display the data from the JSON sent from the API:
+```
+fetch(`/api/set?id=${setId}`)
+    .then(function(setData) { return setData.json(); })
+    .then(function(setJson) {
+        document.getElementById("setId").textContent = setJson.set_id;
+        document.getElementById("setName").textContent = setJson.name;
+
+        const inventoryTable = document.getElementById("inventory");
+
+        setJson.inventory.forEach(item => {
+            const inventoryRow = document.createElement("tr");
+
+            inventoryRow.innerHTML = `
+                <td><img src="${item.preview_image_url}" width="50"></td>
+                <td>${item.brick_type_id}</td>
+                <td>${item.color_id}</td>
+                <td>${item.count}</td>
+            `;
+
+            inventoryTable.appendChild(inventoryRow);
+        });
+    })
+    .catch(function(err) {
+        document.getElementById("error").textContent = "Failed to load data: " + err;
+    });
+```
+
+### Implementing a cache
+To implement the cache I used an `OrderedDict` which makes it possible to keep track of which object was Least Recently Used (LRU) by moving objects to the end when used. To implement the limit of 100, I made it so the `put` function evicts the first (LRU) element in the dictionary:
+```
+from collections import OrderedDict
+
+class SimpleCache:
+    def __init__(self, capacity=100):
+        self.cache = OrderedDict()
+        self.capacity = capacity
+
+    def get(self, key):
+        if key not in self.cache:
+            return None
+
+        # Move to end to make it "Least Recently Used" (LRU)
+        self.cache.move_to_end(key)
+        return self.cache[key]
+
+    def put(self, key, value):
+        if key in self.cache:
+            self.cache.move_to_end(key)
+        self.cache[key] = value
+        
+        # If we exceed capacity, remove the first (oldest) item
+        if len(self.cache) > self.capacity:
+            self.cache.popitem(last=False)
+```
+In the `/set` endpoint I use the `set_id` to check if it has been cached, and if so I return the cached result. I need to take into account that the endpoint may be called without a `set_id`, in that case I cache a default page.
+```
+@app.route("/set")
+def legoSet():
+    set_id = request.args.get("id")
+
+    if set_id is None:
+        set_id = "Default"
+
+    cache_result = cache.get(set_id)
+    if cache_result:
+        return cache_result
+
+    # Not in cache:
+    with open("templates/set.html") as f:
+        template = f.read()
+    response = Response(template)
+    cache.put(set_id, response) # Add to cache
+    return response
+```
+
+### Testing the cache
+I then added timers with `perf_counter()` to see the difference between cache misses and hits (I converted it to ms to better understand the difference):
+```
+Cache miss: 0.13070300155959558 ms
+Cache hit: 0.007753998943371698 ms
+```
+Which mean it was ~17x faster to retrieve it from cache.
+
+### Adding `Cache-Control` header
+To make the browser cache the result for 60 seconds I added an `max-age=60`to the `Cache-Control` field in the header:
+```
+return Response(
+        compressed_bytes, 
+        headers = {
+            'Content-Type': f'text/html; charset={encoding}',
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'max-age=60'
+        })
+```
+It worked, but I learned that the refresh icon (and F5) do a "hard refresh" which ignores the cache, but clicking the URL bar and `Enter` to reload used the cached result.
+

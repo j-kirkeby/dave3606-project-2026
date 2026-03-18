@@ -3,6 +3,7 @@ import html
 import psycopg
 import gzip
 import struct
+from simplecache import SimpleCache
 from flask import Flask, Response, request
 from time import perf_counter
 
@@ -16,6 +17,8 @@ DB_CONFIG = {
     "password": "bricks",
 }
 
+# Cache - see SimpleCache.py for
+cache = SimpleCache(capacity = 100)
 
 @app.route("/")
 def index():
@@ -46,7 +49,7 @@ def sets():
                 html_safe_id = html.escape(row[0])
                 html_safe_name = html.escape(row[1])
                 rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
-        print(f"Time to render all sets: {perf_counter() - start_time}")
+        print(f"Time to render all sets: {(perf_counter() - start_time)}")
     finally:
         conn.close()
 
@@ -61,15 +64,31 @@ def sets():
         compressed_bytes, 
         headers = {
             'Content-Type': f'text/html; charset={encoding}',
-            'Content-Encoding': 'gzip'      
+            'Content-Encoding': 'gzip',
+            'Cache-Control': 'max-age=60'
         })
 
 
 @app.route("/set")
 def legoSet():  # We don't want to call the function `set`, since that would hide the `set` data type.
+    set_id = request.args.get("id")
+
+    if set_id is None:
+        set_id = "Default"
+    
+    start_time = perf_counter()
+    cache_result = cache.get(set_id)
+    if cache_result:
+        print(f"Cache hit: {(perf_counter() - start_time)*1000} ms")
+        return cache_result
+
+    # Not in cache:
     with open("templates/set.html") as f:
         template = f.read()
-    return Response(template)
+    response = Response(template)
+    cache.put(set_id, response) # Add to cache
+    print(f"Cache miss: {(perf_counter() - start_time)*1000} ms")
+    return response
 
 @app.route("/api/set/bin")
 def apiSetBin():
