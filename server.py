@@ -1,21 +1,13 @@
 import json
 import html
-import psycopg
 import gzip
 import struct
 from simplecache import SimpleCache
+from database import Database
 from flask import Flask, Response, request
 from time import perf_counter
 
 app = Flask(__name__)
-
-DB_CONFIG = {
-    "host": "localhost",
-    "port": 9876,
-    "dbname": "lego-db",
-    "user": "lego",
-    "password": "bricks",
-}
 
 # Cache - see SimpleCache.py for
 cache = SimpleCache(capacity = 100)
@@ -40,18 +32,20 @@ def sets():
         template = f.read()
     rows = [] # List to hold the rows to avoid painter's algorithm
 
+
     start_time = perf_counter()
-    conn = psycopg.connect(**DB_CONFIG)
+    db = Database()
     try:
-        with conn.cursor() as cur:
-            cur.execute("select id, name from lego_set order by id")
-            for row in cur.fetchall():
-                html_safe_id = html.escape(row[0])
-                html_safe_name = html.escape(row[1])
-                rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+        db_result = db.execute_and_fetch_all("select id, name from lego_set order by id")
+
+        for row in db_result:
+            html_safe_id = html.escape(row[0])
+            html_safe_name = html.escape(row[1])
+            rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+        
         print(f"Time to render all sets: {(perf_counter() - start_time)}")
     finally:
-        conn.close()
+        db.close()
 
     result = "".join(rows) # Combine the strings efficiently, all at once
     page_html = template.replace("{ROWS}", result).replace("{ENCODING}", encoding)
@@ -96,45 +90,41 @@ def apiSetBin():
 
     # We need to connect to the database and retrieve the set and brick information
     start_time = perf_counter()
-    conn = psycopg.connect(**DB_CONFIG)
+    db = Database()
     try:
-        with conn.cursor() as cur:
-            # Retrieve set information
-            # Using prepared statement to avoid SQL injection
-            cur.execute(
-                "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
-                [set_id],
-                prepare=True)
-            result = cur.fetchone()
-            year = result[0]
-            name = result[1]
-            category = result[2]
-            preview_image_url = result[3]
+        db_result_set = db.execute_and_fetch_all("SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+            [set_id],
+            prepare=True)
+
+        result = db_result_set[0]
+        year = result[0]
+        name = result[1]
+        category = result[2]
+        preview_image_url = result[3]
         
-            # Retrieve inventory and brick information
-            # Using prepared statement to avoid SQL injection
-            inventory = []
-            cur.execute(
-                "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
-                "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
-                "WHERE set_id = %s;",
-                [set_id],
-                prepare=True)
+        # Retrieve inventory and brick information
+        # Using prepared statement to avoid SQL injection
+        inventory = []
+        db_result_inventory = db.execute_and_fetch_all("SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+            "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+            "WHERE set_id = %s;",
+            [set_id],
+            prepare=True)
+        
+        for line in db_result_inventory:
+            item = {}
+            item["brick_type_id"] = line[1]
+            item["color_id"] = line[2]
+            item["count"] = line[3]
+            item["name"] = line[4]
+            item["preview_image_url"] = line[5]
             
-            for line in cur.fetchall():
-                item = {}
-                item["brick_type_id"] = line[1]
-                item["color_id"] = line[2]
-                item["count"] = line[3]
-                item["name"] = line[4]
-                item["preview_image_url"] = line[5]
-                
-                # Add the item to the inventory
-                inventory.append(item)
+            # Add the item to the inventory
+            inventory.append(item)
 
         print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
     finally:
-        conn.close()
+        db.close()
 
     set = {
         "set_id": set_id,
@@ -221,7 +211,7 @@ def write_set_to_binary(set):
             encoded_preview_image_url_length = len(encoded_preview_image_url)
             binary += struct.pack(">BH", 1, encoded_preview_image_url_length)
             binary += encoded_preview_image_url
-    
+
     return binary
 
 
@@ -231,45 +221,42 @@ def apiSet():
 
     # We need to connect to the database and retrieve the set and brick information
     start_time = perf_counter()
-    conn = psycopg.connect(**DB_CONFIG)
+    db = Database()
     try:
-        with conn.cursor() as cur:
-            # Retrieve set information
-            # Using prepared statement to avoid SQL injection
-            cur.execute(
-                "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
-                [set_id],
-                prepare=True)
-            result = cur.fetchone()
-            html_safe_year = result[0] # No need for html.escape() on integers
-            html_safe_name = html.escape(result[1])
-            html_safe_category = html.escape(result[2])
-            html_safe_preview_image_url = html.escape(result[3])
-        
-            # Retrieve inventory and brick information
-            # Using prepared statement to avoid SQL injection
-            html_safe_inventory = []
-            cur.execute(
-                "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
-                "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
-                "WHERE set_id = %s;",
-                [set_id],
-                prepare=True)
-            
-            for item in cur.fetchall():
-                html_safe_item = {}
-                html_safe_item["brick_type_id"] = html.escape(item[1])
-                html_safe_item["color_id"] = item[2]
-                html_safe_item["count"] = item[3]
-                html_safe_item["name"] = html.escape(item[4])
-                html_safe_item["preview_image_url"] = html.escape(item[5])
-                
-                # Add the item to the inventory
-                html_safe_inventory.append(html_safe_item)
+        # Retrieve set information
+        # Using prepared statement to avoid SQL injection
+        result = db.execute_and_fetch_all(
+            "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+            [set_id],
+            prepare=True)[0]
+        html_safe_year = result[0] # No need for html.escape() on integers
+        html_safe_name = html.escape(result[1])
+        html_safe_category = html.escape(result[2])
+        html_safe_preview_image_url = html.escape(result[3])
 
+        # Retrieve inventory and brick information
+        # Using prepared statement to avoid SQL injection
+        html_safe_inventory = []
+        result_inventory = db.execute_and_fetch_all(
+            "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+            "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+            "WHERE set_id = %s;",
+            [set_id],
+            prepare=True)
+        
+        for item in result_inventory:
+            html_safe_item = {}
+            html_safe_item["brick_type_id"] = html.escape(item[1])
+            html_safe_item["color_id"] = item[2]
+            html_safe_item["count"] = item[3]
+            html_safe_item["name"] = html.escape(item[4])
+            html_safe_item["preview_image_url"] = html.escape(item[5])
+            
+            # Add the item to the inventory
+            html_safe_inventory.append(html_safe_item)
         print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
     finally:
-        conn.close()
+        db.close()
     
     
     result = {

@@ -580,3 +580,63 @@ return Response(
 ```
 It worked, but I learned that the refresh icon (and F5) do a "hard refresh" which ignores the cache, but clicking the URL bar and `Enter` to reload used the cached result.
 
+## Task 7: Testing and dependency injection
+### Creating the Database class
+First I defined the `Database` class in `database.py`:
+```
+class Database:
+    def __init__(self):
+        self.conn = psycopg.connect(**DB_CONFIG)
+        self.cur = self.conn.cursor()
+
+    def execute_and_fetch_all(self, query):
+        self.cur.execute(query)
+        return self.cur.fetchall()
+    
+    def close(self):
+        self.cur.close()
+        self.conn.close()
+```
+Then I updated the endpoints. By changing this:
+```
+conn = psycopg.connect(**DB_CONFIG)
+try:
+    with conn.cursor() as cur:
+        cur.execute("select id, name from lego_set order by id")
+        for row in cur.fetchall():
+            html_safe_id = html.escape(row[0])
+            html_safe_name = html.escape(row[1])
+            rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+    print(f"Time to render all sets: {(perf_counter() - start_time)}")
+finally:
+    conn.close()
+```
+Into this (and equivalent for the other endpoints):
+```
+db = Database()
+try:
+    db_result = db.execute_and_fetch_all("select id, name from lego_set order by id")
+
+    for row in db_result:
+        html_safe_id = html.escape(row[0])
+        html_safe_name = html.escape(row[1])
+        rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+    
+    print(f"Time to render all sets: {(perf_counter() - start_time)}")
+finally:
+    db.close()
+```
+Some of the endpoints used parameterized queries, in order to pass this we need to update `execute_and_fetch_all` function:
+```
+def execute_and_fetch_all(self, query, vars=None, **kwargs):
+        self.cur.execute(query, vars, **kwargs)
+        return self.cur.fetchall()
+```
+Now we can send pass along parameters for the query, and other parameters for the `execute` function which are stored in the `**kwargs`:
+```
+db_result_set = db.execute_and_fetch_all("SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+            [set_id],
+            prepare=True)
+```
+
+### Testing
