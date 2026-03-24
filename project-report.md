@@ -640,3 +640,28 @@ db_result_set = db.execute_and_fetch_all("SELECT year, name, category, preview_i
 ```
 
 ### Testing
+To use the Dependency Injection pattern we need to move the actions done towards the database into separate functions that take a database as a parameter. We essentially move the logic inside the `try` into a separate function:
+```
+def get_sets_list_html(db):
+    rows = []
+
+    start_time = perf_counter()
+    db_result = db.execute_and_fetch_all("select id, name from lego_set order by id")
+
+    for row in db_result:
+        html_safe_id = html.escape(row[0])
+        html_safe_name = html.escape(row[1])
+        rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+    
+    print(f"Time to render all sets: {(perf_counter() - start_time)}")
+    return rows
+```
+And in the endpoint:
+```
+db = Database()
+try:
+    rows = get_sets_list_html(db)
+finally:
+    db.close()
+```
+

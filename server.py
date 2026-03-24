@@ -9,7 +9,7 @@ from time import perf_counter
 
 app = Flask(__name__)
 
-# Cache - see SimpleCache.py for
+# Cache - see SimpleCache.py
 cache = SimpleCache(capacity = 100)
 
 @app.route("/")
@@ -30,20 +30,10 @@ def sets():
 
     with open("templates/sets.html") as f:
         template = f.read()
-    rows = [] # List to hold the rows to avoid painter's algorithm
 
-
-    start_time = perf_counter()
     db = Database()
     try:
-        db_result = db.execute_and_fetch_all("select id, name from lego_set order by id")
-
-        for row in db_result:
-            html_safe_id = html.escape(row[0])
-            html_safe_name = html.escape(row[1])
-            rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
-        
-        print(f"Time to render all sets: {(perf_counter() - start_time)}")
+        rows = get_sets_list_html(db)
     finally:
         db.close()
 
@@ -88,58 +78,36 @@ def legoSet():  # We don't want to call the function `set`, since that would hid
 def apiSetBin():
     set_id = request.args.get("id")
 
-    # We need to connect to the database and retrieve the set and brick information
-    start_time = perf_counter()
     db = Database()
     try:
-        db_result_set = db.execute_and_fetch_all("SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
-            [set_id],
-            prepare=True)
-
-        result = db_result_set[0]
-        year = result[0]
-        name = result[1]
-        category = result[2]
-        preview_image_url = result[3]
-        
-        # Retrieve inventory and brick information
-        # Using prepared statement to avoid SQL injection
-        inventory = []
-        db_result_inventory = db.execute_and_fetch_all("SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
-            "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
-            "WHERE set_id = %s;",
-            [set_id],
-            prepare=True)
-        
-        for line in db_result_inventory:
-            item = {}
-            item["brick_type_id"] = line[1]
-            item["color_id"] = line[2]
-            item["count"] = line[3]
-            item["name"] = line[4]
-            item["preview_image_url"] = line[5]
-            
-            # Add the item to the inventory
-            inventory.append(item)
-
-        print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
+        set = get_set_data(db, set_id)
     finally:
         db.close()
-
-    set = {
-        "set_id": set_id,
-        "year": year,
-        "name": name,
-        "category": category,
-        "preview_image_url": preview_image_url,
-        "inventory": inventory
-    }
 
     binary = write_set_to_binary(set)
 
     return Response(binary, content_type="application/octet-stream")
     
 
+
+
+@app.route("/api/set")
+def apiSet():
+    set_id = request.args.get("id")
+
+    db = Database()
+    try:
+        result = get_set_data_for_html()
+    finally:
+        db.close()
+    
+    json_result = json.dumps(result, indent=4)
+    return Response(json_result, content_type="application/json")
+
+if __name__ == "__main__":
+    app.run(port=5000, debug=True)
+
+# Note: If you define new routes, they have to go above the call to `app.run`.
 
 # Helper method to write a set to binary
 def write_set_to_binary(set):
@@ -215,51 +183,103 @@ def write_set_to_binary(set):
     return binary
 
 
-@app.route("/api/set")
-def apiSet():
-    set_id = request.args.get("id")
+def get_sets_list_html(db):
+    rows = [] # List to hold the rows to avoid painter's algorithm
 
-    # We need to connect to the database and retrieve the set and brick information
     start_time = perf_counter()
-    db = Database()
-    try:
-        # Retrieve set information
-        # Using prepared statement to avoid SQL injection
-        result = db.execute_and_fetch_all(
-            "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
-            [set_id],
-            prepare=True)[0]
-        html_safe_year = result[0] # No need for html.escape() on integers
-        html_safe_name = html.escape(result[1])
-        html_safe_category = html.escape(result[2])
-        html_safe_preview_image_url = html.escape(result[3])
+    db_result = db.execute_and_fetch_all("select id, name from lego_set order by id")
 
-        # Retrieve inventory and brick information
-        # Using prepared statement to avoid SQL injection
-        html_safe_inventory = []
-        result_inventory = db.execute_and_fetch_all(
-            "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
-            "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
-            "WHERE set_id = %s;",
+    for row in db_result:
+        html_safe_id = html.escape(row[0])
+        html_safe_name = html.escape(row[1])
+        rows.append(f'<tr><td><a href="/set?id={html_safe_id}">{html_safe_id}</a></td><td>{html_safe_name}</td></tr>\n')
+    
+    print(f"Time to render all sets: {(perf_counter() - start_time)}")
+    return rows
+
+# Gets set data and inventory for the binary endpoint, doesn't html.escape()
+def get_set_data(db, set_id):
+    start_time = perf_counter()
+
+    db_result_set = db.execute_and_fetch_all("SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
             [set_id],
             prepare=True)
+
+    result = db_result_set[0]
+    year = result[0]
+    name = result[1]
+    category = result[2]
+    preview_image_url = result[3]
+
+    # Retrieve inventory and brick information
+    # Using prepared statement to avoid SQL injection
+    inventory = []
+    db_result_inventory = db.execute_and_fetch_all("SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+        "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+        "WHERE set_id = %s;",
+        [set_id],
+        prepare=True)
+    
+    for line in db_result_inventory:
+        item = {}
+        item["brick_type_id"] = line[1]
+        item["color_id"] = line[2]
+        item["count"] = line[3]
+        item["name"] = line[4]
+        item["preview_image_url"] = line[5]
         
-        for item in result_inventory:
-            html_safe_item = {}
-            html_safe_item["brick_type_id"] = html.escape(item[1])
-            html_safe_item["color_id"] = item[2]
-            html_safe_item["count"] = item[3]
-            html_safe_item["name"] = html.escape(item[4])
-            html_safe_item["preview_image_url"] = html.escape(item[5])
-            
-            # Add the item to the inventory
-            html_safe_inventory.append(html_safe_item)
-        print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
-    finally:
-        db.close()
+        # Add the item to the inventory
+        inventory.append(item)
+
+    print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
+
+    return {
+        "set_id": set_id,
+        "year": year,
+        "name": name,
+        "category": category,
+        "preview_image_url": preview_image_url,
+        "inventory": inventory
+    }
+
+# Returns set data with inventory with data safe for html
+def get_set_data_for_html(db, set_id):
+    start_time = perf_counter()
+
+    # Retrieve set information
+    # Using prepared statement to avoid SQL injection
+    result = db.execute_and_fetch_all(
+        "SELECT year, name, category, preview_image_url FROM lego_set WHERE id = %s;",
+        [set_id],
+        prepare=True)[0]
+    html_safe_year = result[0] # No need for html.escape() on integers
+    html_safe_name = html.escape(result[1])
+    html_safe_category = html.escape(result[2])
+    html_safe_preview_image_url = html.escape(result[3])
+
+    # Retrieve inventory and brick information
+    # Using prepared statement to avoid SQL injection
+    html_safe_inventory = []
+    result_inventory = db.execute_and_fetch_all(
+        "SELECT set_id, i.brick_type_id, i.color_id, count, name, preview_image_url " \
+        "FROM (lego_inventory AS i INNER JOIN lego_brick AS b ON i.brick_type_id = b.brick_type_id AND i.color_id = b.color_id) " \
+        "WHERE set_id = %s;",
+        [set_id],
+        prepare=True)
     
-    
-    result = {
+    for item in result_inventory:
+        html_safe_item = {}
+        html_safe_item["brick_type_id"] = html.escape(item[1])
+        html_safe_item["color_id"] = item[2]
+        html_safe_item["count"] = item[3]
+        html_safe_item["name"] = html.escape(item[4])
+        html_safe_item["preview_image_url"] = html.escape(item[5])
+        
+        # Add the item to the inventory
+        html_safe_inventory.append(html_safe_item)
+    print(f"Time to retrieve set info and inventory: {perf_counter() - start_time}")
+
+    return {
         "set_id": set_id,
         "year": html_safe_year,
         "name": html_safe_name,
@@ -267,10 +287,4 @@ def apiSet():
         "preview_image_url": html_safe_preview_image_url,
         "inventory": html_safe_inventory
     }
-    json_result = json.dumps(result, indent=4)
-    return Response(json_result, content_type="application/json")
-
-if __name__ == "__main__":
-    app.run(port=5000, debug=True)
-
-# Note: If you define new routes, they have to go above the call to `app.run`.
+    
