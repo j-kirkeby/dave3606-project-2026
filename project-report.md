@@ -664,4 +664,49 @@ try:
 finally:
     db.close()
 ```
+We can then create a `MockDatabase` that returns what we expect from the database, and we can use this to test if the function returns the expected output. We also check if the function performs the expected query:
+```
+class MockDatabase:
+    def __init__(self, db_result, expected_query):
+        self.db_result = db_result
+        self.expected_query = expected_query
 
+    def execute_and_fetch_all(self, query):
+        if (query != self.expected_query):
+            print("MockDatabase: Unexpected query!")
+            return ()
+        
+        return self.db_result
+        
+    def close():
+        return
+```
+For the function `get_sets_list_html` the database should return some a tuple containing some rows (also tuples) with (`id`, `name`). Then the function should return a list of html rows containing the info:
+```
+def test_get_sets_list_html():
+    # Arrange
+    # Setting up the mock database with return values
+    set_id1 = "123-ab"
+    name1 = "Lego set 1"
+    set_id2 = "456-cd"
+    name2 = "Lego set 2"
+
+    db = MockDatabase(((set_id1, name1), (set_id2, name2)))
+
+    # Act
+    # Performing the function call
+    result = get_sets_list_html(db)
+
+    # Assert
+    # Check that the result is matching what we expect
+    expected_result = [
+        f'<tr><td><a href="/set?id={set_id1}">{set_id1}</a></td><td>{name1}</td></tr>\n',
+        f'<tr><td><a href="/set?id={set_id2}">{set_id2}</a></td><td>{name2}</td></tr>\n',
+    ]
+
+    if result == expected_result:
+        print("test_get_sets_list_html: Test passed!")
+    else:
+        print("test_get_sets_list_html: Test failed! Unexpected result.")
+```
+I created similar tests for the other functions that use a database in the file `testing.py`. To run the tests just run that file with python. Since some of my functions made multiple queries, I changed the `MockDatabase`to accept a list of `expected_queries` and `db_results`instead.
